@@ -76,12 +76,4 @@ jobs:
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
 
-      - name: Cleanup Firewall Rule
-        if: always()
-        run: |
-          az mysql flexible-server firewall-rule delete \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --server-name drupal-db-user1-5ad1bbb1 \
-            --name AllowAllTemporary \
-            --yes
-          echo "Firewall rule AllowAllTemporary removed"
+      
