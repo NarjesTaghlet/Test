@@ -57,12 +57,13 @@ jobs:
           docker push $IMAGE_NAME
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
 
-      - name: Deploy Drupal to ACI
+      - name: Deploy Drupal to ACI with Validation
         run: |
           INSTANCE_ID=$(date +%s)
+          CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
-            --name drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID \
+            --name $CONTAINER_NAME \
             --image ${{ env.IMAGE_NAME }} \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
             --ports 80 \
@@ -81,4 +82,8 @@ jobs:
             --registry-password "$ACR_PASSWORD" \
             --memory 4 \
             --cpu 2
+          echo "Waiting for container to start (30 seconds)..."
+          sleep 30
+          echo "Checking container logs..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
