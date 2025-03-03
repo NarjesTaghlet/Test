@@ -77,7 +77,7 @@ jobs:
             --registry-password "$ACR_PASSWORD" \
             --memory 4 \
             --cpu 2
-          echo "Waiting for container to start (60 seconds)..."
+          echo "Waiting for container to start (60 seconds)..."  # Réduit de 120 à 60
           sleep 60
           echo "Checking container logs..."
           az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
