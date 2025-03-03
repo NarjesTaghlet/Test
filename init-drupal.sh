@@ -35,14 +35,13 @@ done
 
 echo "Database connection successful!"
 
-# Configurer settings.php si nécessaire
-if [ ! -f "/var/www/html/web/sites/default/settings.php" ] || ! grep -q "databases" /var/www/html/web/sites/default/settings.php; then
-  echo "Configuring Drupal settings..."
-  rm -f /var/www/html/web/sites/default/settings.php
-  cp /var/www/html/web/sites/default/default.settings.php /var/www/html/web/sites/default/settings.php || { echo "Failed to copy settings.php"; exit 1; }
-  chmod 664 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
+# Configurer settings.php pour la nouvelle base
+echo "Configuring Drupal settings..."
+rm -f /var/www/html/web/sites/default/settings.php
+cp /var/www/html/web/sites/default/default.settings.php /var/www/html/web/sites/default/settings.php || { echo "Failed to copy settings.php"; exit 1; }
+chmod 664 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
 
-  cat <<EOL >> /var/www/html/web/sites/default/settings.php
+cat <<EOL >> /var/www/html/web/sites/default/settings.php
 \$databases['default']['default'] = [
   'driver' => 'mysql',
   'host' => '$DRUPAL_DB_HOST',
@@ -56,35 +55,29 @@ if [ ! -f "/var/www/html/web/sites/default/settings.php" ] || ! grep -q "databas
 ];
 EOL
 
-  chmod 444 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
+chmod 444 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
 
-  # Installer Drupal avec Drush si la base est vide
-  #TABLES=$(mysql -h $DRUPAL_DB_HOST -u $DRUPAL_DB_USER -p$DRUPAL_DB_PASSWORD -P 3306 $DRUPAL_DB_NAME -e SHOW TABLES LIKE config; 2>/dev/null | grep -c config)
-  #if [ $TABLES" -eq 0 ]; then
-    #echo Running Drush site-install..."
-    cd /var/www/html
-    vendor/bin/drush site-install standard \
-      --db-url="mysql://$DRUPAL_DB_USER:$DRUPAL_DB_PASSWORD@$DRUPAL_DB_HOST:3306/$DRUPAL_DB_NAME" \
-      --site-name="$DRUPAL_SITE_NAME" \
-      --account-name="$DRUPAL_ADMIN_USERNAME" \
-      --account-pass="$DRUPAL_ADMIN_PASSWORD" \
-      --account-mail="admin@example.com" \
-      --verbose \
-      -y 2>/tmp/drush_error.log || { echo "Failed to install Drupal with Drush"; cat /tmp/drush_error.log; exit 1; }
-    echo "Drupal site installed successfully"
-  else
-    echo "Drupal site already installed, skipping installation"
-  fi
-else
-  echo "Settings already configured, skipping"
-fi
+# Installer Drupal dans la nouvelle base
+echo "Running Drush site-install..."
+cd /var/www/html
+vendor/bin/drush site-install standard \
+  --db-url="mysql://$DRUPAL_DB_USER:$DRUPAL_DB_PASSWORD@$DRUPAL_DB_HOST:3306/$DRUPAL_DB_NAME" \
+  --site-name="$DRUPAL_SITE_NAME" \
+  --account-name="$DRUPAL_ADMIN_USERNAME" \
+  --account-pass="$DRUPAL_ADMIN_PASSWORD" \
+  --account-mail="admin@example.com" \
+  --verbose \
+  -y 2>/tmp/drush_error.log || { echo "Failed to install Drupal with Drush"; cat /tmp/drush_error.log; exit 1; }
+echo "Drupal site installed successfully"
 
-# Créer le répertoire files s'il n'existe pas
+# Créer le répertoire files
 if [ ! -d "/var/www/html/web/sites/default/files" ]; then
+  echo "Creating files directory..."
   mkdir -p /var/www/html/web/sites/default/files || { echo "Failed to create files directory"; exit 1; }
   echo "Created files directory"
 fi
 
+echo "Setting permissions on files directory..."
 chown -R www-data:www-data /var/www/html/web/sites/default/files || { echo "Failed to chown files directory"; exit 1; }
 chmod -R 775 /var/www/html/web/sites/default/files || { echo "Failed to chmod files directory"; exit 1; }
 
