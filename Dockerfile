@@ -21,4 +21,4 @@ RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot /var/www/html/web|' /etc/a
     && a2enmod rewrite \
     && echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
-CMD ["/usr/local/bin/init.sh"]
+CMD ["/usr/local/bin/init-drupal.sh"]
