@@ -59,9 +59,9 @@ EOL
   chmod 444 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
 
   # Installer Drupal avec Drush si la base est vide
-  TABLES=$(mysql -h "$DRUPAL_DB_HOST" -u "$DRUPAL_DB_USER" -p"$DRUPAL_DB_PASSWORD" -P 3306 "$DRUPAL_DB_NAME" -e "SHOW TABLES LIKE 'config';" 2>/dev/null | grep -c "config")
-  if [ "$TABLES" -eq 0 ]; then
-    echo "Running Drush site-install..."
+  #TABLES=$(mysql -h $DRUPAL_DB_HOST -u $DRUPAL_DB_USER -p$DRUPAL_DB_PASSWORD -P 3306 $DRUPAL_DB_NAME -e SHOW TABLES LIKE config; 2>/dev/null | grep -c config)
+  #if [ $TABLES" -eq 0 ]; then
+    #echo Running Drush site-install..."
     cd /var/www/html
     vendor/bin/drush site-install standard \
       --db-url="mysql://$DRUPAL_DB_USER:$DRUPAL_DB_PASSWORD@$DRUPAL_DB_HOST:3306/$DRUPAL_DB_NAME" \
