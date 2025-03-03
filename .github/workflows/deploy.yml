@@ -33,16 +33,7 @@ jobs:
           echo "ACR_USERNAME=$ACR_USERNAME" >> $GITHUB_ENV
           echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_ENV
 
-      - name: Configure Firewall Rule for MySQL Server
-        run: |
-          az mysql flexible-server firewall-rule create \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --server-name drupal-db-user1-5ad1bbb1 \
-            --name AllowAllTemporary \
-            --start-ip-address 0.0.0.0 \
-            --end-ip-address 255.255.255.255
-          echo "Firewall rule AllowAllTemporary created"
-
+    
       - name: Build and Push Drupal Image
         run: |
           TIMESTAMP=$(date +%s)
