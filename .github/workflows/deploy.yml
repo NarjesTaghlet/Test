@@ -17,7 +17,7 @@ jobs:
       - name: Login to Azure with device code
         run: |
           az login --use-device-code
-          az account set --subscription "51278ad7-befb-4149-a26d-065e1c8b03da"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Create ACR if not exists
         run: |
