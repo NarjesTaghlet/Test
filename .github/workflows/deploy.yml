@@ -66,6 +66,7 @@ jobs:
             --image ${{ env.IMAGE_NAME }} \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
             --ports 80 \
+            --os-type Linux \
             --environment-variables \
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
