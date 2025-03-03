@@ -33,7 +33,7 @@ jobs:
           echo "ACR_USERNAME=$ACR_USERNAME" >> $GITHUB_ENV
           echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_ENV
 
-      - name: Create New Database on Existing Server
+      - name: Create New Database and User
         run: |
           TIMESTAMP=$(date +%s)
           USER_ID="${{ github.event.inputs.user_id }}"
@@ -44,9 +44,21 @@ jobs:
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --server-name drupal-db-user1-5ad1bbb1 \
             --database-name $DB_NAME
+          az mysql flexible-server user create \
+            --server-name drupal-db-user1-5ad1bbb1 \
+            --resource-group drupal-rg-user1-5ad1bbb1 \
+            --name "$DB_USER" \
+            --password "$DB_PASSWORD"
+          az mysql flexible-server user grant \
+            --server-name drupal-db-user1-5ad1bbb1 \
+            --resource-group drupal-rg-user1-5ad1bbb1 \
+            --name "$DB_USER" \
+            --database-name "$DB_NAME" \
+            --privileges "ALL PRIVILEGES"
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
-          echo "DB_USER=$DB_USER" >> $GITHUB_ENV
+          echo "DB_USER=$DB_USER@drupal-db-user1-5ad1bbb1" >> $GITHUB_ENV
           echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
+          echo "Created database: $DB_NAME with user: $DB_USER"
 
       - name: Build and Push Drupal Image
         run: |
@@ -82,8 +94,10 @@ jobs:
             --registry-password "$ACR_PASSWORD" \
             --memory 4 \
             --cpu 2
-          echo "Waiting for container to start (30 seconds)..."
-          sleep 30
+          echo "Waiting for container to start (120 seconds)..."
+          sleep 120
           echo "Checking container logs..."
-          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
+          echo "Checking container status..."
+          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
