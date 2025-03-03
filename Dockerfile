@@ -13,8 +13,8 @@ RUN composer create-project drupal/recommended-project:10.x . \
     && chown -R www-data:www-data /var/www/html
 
 # Copier init.sh
-COPY init.sh /usr/local/bin/init.sh
-RUN chmod +x /usr/local/bin/init.sh
+COPY init-drupal.sh /usr/local/bin/init-drupal.sh
+RUN chmod +x /usr/local/bin/init-drupal.sh
 
 # Configurer Apache
 RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot /var/www/html/web|' /etc/apache2/sites-available/000-default.conf \
