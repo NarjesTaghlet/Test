@@ -1,4 +1,4 @@
-name: Test Workflow 
+name: Deploy Drupal
 
 on:
   workflow_dispatch:
@@ -53,7 +53,7 @@ jobs:
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --name $CONTAINER_NAME \
-            --image drupalacrnarjes.azurecr.io/drupal:latest \
+            --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
             --ports 80 \
             --os-type Linux \
@@ -79,3 +79,4 @@ jobs:
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
 
+   
