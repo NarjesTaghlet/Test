@@ -47,8 +47,8 @@ jobs:
             --environment-variables \
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
-              DRUPAL_DB_USER=drupaluser_user1 \
-              DRUPAL_DB_PASSWORD=xr4u8WSiq3B!TQOL \
+              DRUPAL_DB_USER=${{ secrets.DB_USER }} \
+              DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }}  \
               DRUPAL_ADMIN_USERNAME=admin \
               DRUPAL_ADMIN_PASSWORD=admin \
               DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
