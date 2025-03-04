@@ -1,4 +1,4 @@
-name: Test Workflow
+name:  Test Workflow
 
 on:
   workflow_dispatch:
@@ -19,32 +19,19 @@ jobs:
           az login --use-device-code
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Create New Database and User
+
+
+      - name: Create New Database
         run: |
           TIMESTAMP=$(date +%s)
           USER_ID="${{ github.event.inputs.user_id }}"
           DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
-          DB_USER="drupaluser_$USER_ID"
-          DB_PASSWORD=$(openssl rand -base64 12)
           az mysql flexible-server db create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --server-name drupal-db-user1-5ad1bbb1 \
             --database-name $DB_NAME
-          az mysql flexible-server user create \
-            --server-name drupal-db-user1-5ad1bbb1 \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --name "$DB_USER" \
-            --password "$DB_PASSWORD"
-          az mysql flexible-server user grant \
-            --server-name drupal-db-user1-5ad1bbb1 \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --name "$DB_USER" \
-            --database-name "$DB_NAME" \
-            --privileges "ALL PRIVILEGES"
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
-          echo "DB_USER=$DB_USER@drupal-db-user1-5ad1bbb1" >> $GITHUB_ENV
-          echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
-          echo "Created database: $DB_NAME with user: $DB_USER"
+          echo "Created database: $DB_NAME"
 
       - name: Deploy Drupal to ACI with New Database
         run: |
@@ -60,8 +47,8 @@ jobs:
             --environment-variables \
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
-              DRUPAL_DB_USER=${{ env.DB_USER }} \
-              DRUPAL_DB_PASSWORD=${{ env.DB_PASSWORD }} \
+              DRUPAL_DB_USER=drupaluser_user1@drupal-db-user1-5ad1bbb1 \
+              DRUPAL_DB_PASSWORD=xr4u8WSiq3B!TQOL \
               DRUPAL_ADMIN_USERNAME=admin \
               DRUPAL_ADMIN_PASSWORD=admin \
               DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
@@ -79,4 +66,4 @@ jobs:
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
 
-   
+  
