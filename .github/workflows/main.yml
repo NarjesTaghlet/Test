@@ -1,4 +1,4 @@
-name: Deploy Drupal
+name: Test Workflow
 
 on:
   workflow_dispatch:
