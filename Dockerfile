@@ -22,10 +22,10 @@ RUN cp /var/www/html/sites/default/default.settings.php /var/www/html/sites/defa
     && chmod 775 /var/www/html/sites/default/files
 
 # Copy initialization script
-COPY init-drupal.sh /init-drupal.sh
-RUN chmod +x /init-drupal.sh
+COPY init.sh /init.sh
+RUN chmod +x /init.sh
 
 EXPOSE 80
 
-ENTRYPOINT ["init.sh"]
+ENTRYPOINT ["/init.sh"]
 CMD ["apache2-foreground"]
