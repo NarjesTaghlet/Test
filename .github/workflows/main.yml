@@ -124,8 +124,8 @@ jobs:
             exit 1
           fi
 
-          # Manual step: Configure the site
-          echo "Please visit $URL to complete the Drupal config page (if needed), then proceed."
+          # Manual config step
+          echo "Visit $URL to complete the Drupal config page (if HTTP 302), then wait for restart."
 
           # Restart and test persistence
           echo "Restarting container to test persistence..."
@@ -152,5 +152,5 @@ jobs:
             exit 1
           fi
 
-          echo "Drupal site PERSISTS URL: $URL"
+          echo "Drupal site URL: $URL"
           echo "Persistence confirmed!"
