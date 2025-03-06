@@ -1,0 +1,104 @@
+name: Test 
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'Unique user ID'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Azure with device code
+        run: |
+          az login --use-device-code
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Retrieve or Create Database
+        run: |
+          USER_ID="${{ github.event.inputs.user_id }}"
+          # Check for existing database name in a tracking file
+          if [ -f "db-tracker.json" ]; then
+            DB_NAME=$(cat db-tracker.json | jq -r ".\"$USER_ID\"")
+            if [ "$DB_NAME" != "null" ]; then
+              echo "Reusing existing database: $DB_NAME"
+            else
+              TIMESTAMP=$(date +%s)
+              DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
+              az mysql flexible-server db create \
+                --resource-group drupal-rg-user1-5ad1bbb1 \
+                --server-name drupal-db-user1-5ad1bbb1 \
+                --database-name $DB_NAME
+              echo "Created new database: $DB_NAME"
+              # Update tracking file
+              if [ -s "db-tracker.json" ]; then
+                jq --arg user_id "$USER_ID" --arg db_name "$DB_NAME" \
+                  '.[$user_id] = $db_name' db-tracker.json > tmp.json && mv tmp.json db-tracker.json
+              else
+                echo "{\"$USER_ID\": \"$DB_NAME\"}" > db-tracker.json
+              fi
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add db-tracker.json
+              git commit -m "Track database name for user $USER_ID"
+              git push origin main
+            fi
+          else
+            TIMESTAMP=$(date +%s)
+            DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
+            az mysql flexible-server db create \
+              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --server-name drupal-db-user1-5ad1bbb1 \
+              --database-name $DB_NAME
+            echo "Created new database: $DB_NAME"
+            echo "{\"$USER_ID\": \"$DB_NAME\"}" > db-tracker.json
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add db-tracker.json
+            git commit -m "Track database name for user $USER_ID"
+            git push origin main
+          fi
+          echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
+
+      - name: Deploy Drupal to ACI with Existing Database
+        run: |
+          INSTANCE_ID=$(date +%s)
+          CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          # Delete existing container if it exists
+          if az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query id -o tsv > /dev/null 2>&1; then
+            az container delete --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --yes
+            echo "Deleted existing container: $CONTAINER_NAME"
+          fi
+          az container create \
+            --resource-group drupal-rg-user1-5ad1bbb1 \
+            --name $CONTAINER_NAME \
+            --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
+            --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
+            --ports 80 \
+            --os-type Linux \
+            --environment-variables \
+              DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
+              DRUPAL_DB_NAME=${{ env.DB_NAME }} \
+              DRUPAL_DB_USER=${{ secrets.DB_USER }} \
+              DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+              DRUPAL_ADMIN_USERNAME=admin \
+              DRUPAL_ADMIN_PASSWORD=admin \
+              DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
+              DRUPAL_DB_PREFIX="user_${{ github.event.inputs.user_id }}_${INSTANCE_ID}_" \
+            --registry-login-server drupalacrnarjes.azurecr.io \
+            --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
+            --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
+            --memory 4 \
+            --cpu 2
+          echo "Waiting for container to start (60 seconds)..."
+          sleep 60
+          echo "Checking container logs..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
+          echo "Checking container status..."
+          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
+          echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
