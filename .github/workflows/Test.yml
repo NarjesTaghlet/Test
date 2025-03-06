@@ -15,10 +15,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Login to Azure
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Login to Azure with device code
+        run: |
+          az login --use-device-code
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Create Storage Account and File Share (if not exists)
         id: create_storage
@@ -124,3 +124,10 @@ jobs:
               DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
               DRUPAL_DB_PREFIX="user_${{ github.event.inputs.user_id }}_${INSTANCE_ID}_" \
             --restart-policy Always
+          echo "Waiting for container to start (60 seconds)..."  # Réduit de 120 à 60
+          sleep 60
+          echo "Checking container logs..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
+          echo "Checking container status..."
+          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
+          echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
