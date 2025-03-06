@@ -2,8 +2,10 @@ FROM drupal:10-apache
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
-    mysql-client \
-    && rm -rf /var/lib/apt/lists/*
+    libpng-dev libjpeg-dev libpq-dev libzip-dev zip unzip git \
+    default-mysql-client \
+    && docker-php-ext-configure gd --with-jpeg \
+    && docker-php-ext-install gd pdo pdo_mysql zip
 
 # Install Drush
 RUN composer require drush/drush
