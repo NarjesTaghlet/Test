@@ -1,24 +1,29 @@
-FROM php:8.2-apache
+FROM drupal:10-apache
 
+# Install dependencies
 RUN apt-get update && apt-get install -y \
-    libpng-dev libjpeg-dev libpq-dev libzip-dev zip unzip git mariadb-client \
-    && docker-php-ext-configure gd --with-jpeg \
-    && docker-php-ext-install gd pdo pdo_mysql zip
+    mysql-client \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# Install Drush
+RUN composer require drush/drush
 
+# Set working directory
 WORKDIR /var/www/html
-RUN composer create-project drupal/recommended-project:10.x . \
-    && composer require drush/drush:^13.3 -W \
-    && chown -R www-data:www-data /var/www/html
 
-# Copier init.sh
-COPY init-drupal.sh /usr/local/bin/init-drupal.sh
-RUN chmod +x /usr/local/bin/init-drupal.sh
+# Pre-create settings.php and files directory
+RUN cp /var/www/html/sites/default/default.settings.php /var/www/html/sites/default/settings.php \
+    && chown www-data:www-data /var/www/html/sites/default/settings.php \
+    && chmod 664 /var/www/html/sites/default/settings.php \
+    && mkdir -p /var/www/html/sites/default/files \
+    && chown www-data:www-data /var/www/html/sites/default/files \
+    && chmod 775 /var/www/html/sites/default/files
 
-# Configurer Apache
-RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot /var/www/html/web|' /etc/apache2/sites-available/000-default.conf \
-    && a2enmod rewrite \
-    && echo "ServerName localhost" >> /etc/apache2/apache2.conf
+# Copy initialization script
+COPY init-drupal.sh /init-drupal.sh
+RUN chmod +x /init-drupal.sh
 
-CMD ["/usr/local/bin/init.sh"]
+EXPOSE 80
+
+ENTRYPOINT ["/init-drupal.sh"]
+CMD ["apache2-foreground"]
