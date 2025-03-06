@@ -67,6 +67,7 @@ jobs:
             --name $CONTAINER_NAME \
             --image drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }} \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
+            --os-type Linux \
             --ports 80 \
             --environment-variables \
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
