@@ -85,7 +85,7 @@ jobs:
             --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
             --azure-file-volume-account-key $STORAGE_KEY \
             --azure-file-volume-share-name $FILE_SHARE_NAME \
-            --azure-file-volume-mount-path /var/www/html/sites/default \
+            --azure-file-volume-mount-path /var/www/html/web/sites/default \
             --registry-login-server drupalacrnarjes.azurecr.io \
             --registry-username "$ACR_USERNAME" \
             --registry-password "$ACR_PASSWORD" \
