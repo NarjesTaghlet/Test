@@ -1,63 +1,85 @@
 #!/bin/bash
 
-echo "Starting init-drupal.sh..."
+echo "Starting container setup..."
+sleep 5
 
-# Environment variables
-DB_HOST=${DRUPAL_DB_HOST}
-DB_NAME=${DRUPAL_DB_NAME}
-DB_USER=${DRUPAL_DB_USER}
-DB_PASS=${DRUPAL_DB_PASSWORD}
-ADMIN_USER=${DRUPAL_ADMIN_USERNAME}
-ADMIN_PASS=${DRUPAL_ADMIN_PASSWORD}
-SITE_NAME=${DRUPAL_SITE_NAME}
-DB_PREFIX=${DRUPAL_DB_PREFIX}
-
-echo "DB_HOST=$DB_HOST, DB_NAME=$DB_NAME, DB_USER=$DB_USER, DB_PREFIX=$DB_PREFIX"
-
-# Ensure permissions
-echo "Setting permissions for /var/www/html/sites/default..."
-chown -R www-data:www-data /var/www/html/sites/default
-chmod -R 775 /var/www/html/sites/default
-
-# Check volume mount
-echo "Checking volume mount before installation..."
-ls -la /var/www/html/sites/default || echo "Volume mount check failed!"
-
-# Wait for database
-echo "Checking database connection..."
-until mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -e "SHOW DATABASES;" > /dev/null 2>&1; do
-  echo "Waiting for database connection..."
-  sleep 5
-done
-echo "Database connected!"
-
-# Check if Drupal is installed
-TABLE_COUNT=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SHOW TABLES;" | wc -l)
-echo "Table count: $TABLE_COUNT"
-if [ "$TABLE_COUNT" -le 1 ]; then
-  echo "Installing Drupal..."
-  /var/www/html/vendor/bin/drush site-install standard \
-    --db-url="mysql://$DB_USER:$DB_PASS@$DB_HOST/$DB_NAME" \
-    --account-name="$ADMIN_USER" \
-    --account-pass="$ADMIN_PASS" \
-    --site-name="$SITE_NAME" \
-    --db-prefix="$DB_PREFIX" \
-    -y || { echo "Drush site-install failed!"; exit 1; }
-  echo "Drupal installation completed."
-else
-  echo "Drupal already installed, skipping installation."
-fi
-
-# Verify settings.php
-echo "Verifying settings.php..."
-if [ -f /var/www/html/sites/default/settings.php ]; then
-  echo "settings.php exists. Contents:"
-  cat /var/www/html/sites/default/settings.php
-else
-  echo "Error: settings.php not found!"
+# Vérifier les variables d’environnement
+if [ -z "$DRUPAL_DB_HOST" ] || [ -z "$DRUPAL_DB_NAME" ] || [ -z "$DRUPAL_DB_USER" ] || [ -z "$DRUPAL_DB_PASSWORD" ]; then
+  echo "Error: Missing required environment variables"
+  echo "DRUPAL_DB_HOST: $DRUPAL_DB_HOST"
+  echo "DRUPAL_DB_NAME: $DRUPAL_DB_NAME"
+  echo "DB_USER: $DRUPAL_DB_USER"
+  echo "DB_PASSWORD: $DRUPAL_DB_PASSWORD"
   exit 1
 fi
 
-# Start Apache
+echo "DB_HOST: $DRUPAL_DB_HOST"
+echo "DB_NAME: $DRUPAL_DB_NAME"
+echo "DB_USER: $DRUPAL_DB_USER"
+echo "DB_PASSWORD: $DRUPAL_DB_PASSWORD"
+
+# Vérifier la connexion à la base
+MAX_ATTEMPTS=30
+ATTEMPT=1
+until mysql -h "$DRUPAL_DB_HOST" -u "$DRUPAL_DB_USER" -p"$DRUPAL_DB_PASSWORD" -P 3306 "$DRUPAL_DB_NAME" -e "SELECT 1" 2>/tmp/mysql_error.log; do
+  echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Waiting for database connection..."
+  cat /tmp/mysql_error.log
+  sleep 2
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
+    echo "Error: Database connection failed after $MAX_ATTEMPTS attempts."
+    cat /tmp/mysql_error.log
+    exit 1
+  fi
+done
+
+echo "Database connection successful!"
+
+# Configurer settings.php pour la nouvelle base
+echo "Configuring Drupal settings..."
+rm -f /var/www/html/web/sites/default/settings.php
+cp /var/www/html/web/sites/default/default.settings.php /var/www/html/web/sites/default/settings.php || { echo "Failed to copy settings.php"; exit 1; }
+chmod 664 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
+
+cat <<EOL >> /var/www/html/web/sites/default/settings.php
+\$databases['default']['default'] = [
+  'driver' => 'mysql',
+  'host' => '$DRUPAL_DB_HOST',
+  'database' => '$DRUPAL_DB_NAME',
+  'username' => '$DRUPAL_DB_USER',
+  'password' => '$DRUPAL_DB_PASSWORD',
+  'prefix' => '$DRUPAL_DB_PREFIX',
+  'port' => 3306,
+  'namespace' => 'Drupal\\Core\\Database\\Driver\\mysql',
+  'autoload' => 'core/modules/mysql/src/Driver/Database/mysql/',
+];
+EOL
+
+chmod 444 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
+
+# Installer Drupal dans la nouvelle base
+echo "Running Drush site-install..."
+cd /var/www/html
+vendor/bin/drush site-install standard \
+  --db-url="mysql://$DRUPAL_DB_USER:$DRUPAL_DB_PASSWORD@$DRUPAL_DB_HOST:3306/$DRUPAL_DB_NAME" \
+  --site-name="$DRUPAL_SITE_NAME" \
+  --account-name="$DRUPAL_ADMIN_USERNAME" \
+  --account-pass="$DRUPAL_ADMIN_PASSWORD" \
+  --account-mail="admin@example.com" \
+  --verbose \
+  -y 2>/tmp/drush_error.log || { echo "Failed to install Drupal with Drush"; cat /tmp/drush_error.log; exit 1; }
+echo "Drupal site installed successfully"
+
+# Créer le répertoire files
+if [ ! -d "/var/www/html/web/sites/default/files" ]; then
+  echo "Creating files directory..."
+  mkdir -p /var/www/html/web/sites/default/files || { echo "Failed to create files directory"; exit 1; }
+  echo "Created files directory"
+fi
+
+echo "Setting permissions on files directory..."
+chown -R www-data:www-data /var/www/html/web/sites/default/files || { echo "Failed to chown files directory"; exit 1; }
+chmod -R 775 /var/www/html/web/sites/default/files || { echo "Failed to chmod files directory"; exit 1; }
+
 echo "Starting Apache..."
-exec "$@"
+apache2-foreground || { echo "Apache failed to start"; exit 1; }
