@@ -1,4 +1,4 @@
-name:  Test Workflow
+name: Test Workflow
 
 on:
   workflow_dispatch:
@@ -14,10 +14,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Login to Azure with device code
+      - name: Login to Azure
         run: |
           az login --use-device-code
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Build Docker Image
+        run: |
+          docker build -t drupalacrnarjes.azurecr.io/drupal-custom:latest .
+          echo "Docker image built successfully"
+
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login --name drupalacrnarjes
+          echo "Logged in to ACR"
+
+      - name: Push Docker Image to ACR
+        run: |
+          docker push drupalacrnarjes.azurecr.io/drupal-custom:latest
+          echo "Docker image pushed to drupalacrnarjes.azurecr.io/drupal-custom:latest"
 
       - name: Create New Database
         run: |
@@ -29,23 +44,36 @@ jobs:
             --server-name drupal-db-user1-5ad1bbb1 \
             --database-name $DB_NAME
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
-          echo "Created database: $DB_NAME"
 
-      - name: Create Azure File Share for Persistent Data
-        run: |
-          FILE_SHARE_NAME="drupal-data-${{ github.event.inputs.user_id }}-${TIMESTAMP}"
-          az storage share create --name $FILE_SHARE_NAME --account-name <your-storage-account-name> --account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
-          echo "FILE_SHARE_NAME=$FILE_SHARE_NAME" >> $GITHUB_ENV
-          echo "Created Azure File Share: $FILE_SHARE_NAME"
-
-      - name: Deploy Drupal to ACI with New Database and Persistent Data
+      - name: Deploy Drupal to ACI
         run: |
           INSTANCE_ID=$(date +%s)
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          STORAGE_ACCOUNT_NAME="drupalstg${{ github.event.inputs.user_id }}${INSTANCE_ID: -6}"
+          FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          STORAGE_ACCOUNT_NAME=$(echo "$STORAGE_ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]' | cut -c 1-24)
+
+          # Storage setup
+          if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "name" -o tsv 2>/dev/null; then
+            az storage account create \
+              --name $STORAGE_ACCOUNT_NAME \
+              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --sku Standard_LRS \
+              --location centralus
+          fi
+          STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "[0].value" -o tsv)
+          if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
+            az storage share create \
+              --account-name $STORAGE_ACCOUNT_NAME \
+              --account-key $STORAGE_KEY \
+              --name $FILE_SHARE_NAME
+          fi
+
+          # Deploy container
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --name $CONTAINER_NAME \
-            --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
+            --image drupalacrnarjes.azurecr.io/drupal-custom:latest \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
             --ports 80 \
             --os-type Linux \
@@ -53,24 +81,74 @@ jobs:
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
               DRUPAL_DB_USER=${{ secrets.DB_USER }} \
-              DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }}  \
+              DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
               DRUPAL_ADMIN_USERNAME=admin \
               DRUPAL_ADMIN_PASSWORD=admin \
               DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
               DRUPAL_DB_PREFIX="user_${{ github.event.inputs.user_id }}_${INSTANCE_ID}_" \
-            --azure-file-volume-mount-path /var/www/html/ \
-            --azure-file-share-name ${{ env.FILE_SHARE_NAME }} \
-            --azure-file-share-account-name <your-storage-account-name> \
-            --azure-file-share-account-key ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }} \
+            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
+            --azure-file-volume-account-key $STORAGE_KEY \
+            --azure-file-volume-share-name $FILE_SHARE_NAME \
+            --azure-file-volume-mount-path /var/www/html/sites/default \
             --registry-login-server drupalacrnarjes.azurecr.io \
             --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
             --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
             --memory 4 \
             --cpu 2
-          echo "Waiting for container to start (60 seconds)..."
+
+          echo "Waiting for container to start (180 seconds)..."
+          sleep 180
+
+          # Verify initial deployment
+          STATE=$(az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "instanceView.state" -o tsv)
+          echo "Container state: $STATE"
+          if [ "$STATE" != "Running" ]; then
+            echo "Container not running!"
+            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+            exit 1
+          fi
+
+          echo "Checking volume mount..."
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ls -la /var/www/html/sites/default" || echo "Mount failed!"
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "cat /var/www/html/sites/default/settings.php" || echo "Settings file still missing!"
+
+          URL="http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+          curl -v "$URL" > curl_initial.txt 2>&1
+          STATUS_CODE=$(grep -o "HTTP/1.1 [0-9]\+" curl_initial.txt | awk '{print $2}' || echo "No response")
+          echo "Initial HTTP Status Code: $STATUS_CODE"
+          if [ "$STATUS_CODE" != "200" ] && [ "$STATUS_CODE" != "302" ]; then
+            echo "Site not loading initially! Curl output:"
+            cat curl_initial.txt
+            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+            exit 1
+          fi
+
+          # Restart and test persistence
+          echo "Restarting container to test persistence..."
+          az container restart --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
           sleep 60
-          echo "Checking container logs..."
-          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
-          echo "Checking container status..."
-          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
-          echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+
+          STATE=$(az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "instanceView.state" -o tsv)
+          echo "Container state after restart: $STATE"
+          if [ "$STATE" != "Running" ]; then
+            echo "Container not running after restart!"
+            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+            exit 1
+          fi
+
+          echo "Checking persistence after restart..."
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ls -la /var/www/html/sites/default" || echo "Mount failed after restart!"
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "cat /var/www/html/sites/default/settings.php" || echo "Settings file missing after restart!"
+
+          curl -v "$URL" > curl_restart.txt 2>&1
+          RESTART_STATUS=$(grep -o "HTTP/1.1 [0-9]\+" curl_restart.txt | awk '{print $2}' || echo "No response")
+          echo "HTTP Status Code after restart: $RESTART_STATUS"
+          if [ "$RESTART_STATUS" != "200" ]; then
+            echo "Site not loading after restart! Curl output:"
+            cat curl_restart.txt
+            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+            exit 1
+          fi
+
+          echo "Drupal site URL: $URL"
+          echo "Persistence confirmed!"
