@@ -52,21 +52,33 @@ jobs:
           STORAGE_ACCOUNT_NAME="drupalstg${{ github.event.inputs.user_id }}${INSTANCE_ID: -6}"
           FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
           STORAGE_ACCOUNT_NAME=$(echo "$STORAGE_ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]' | cut -c 1-24)
+          echo "CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_ENV
 
-          # Storage setup
+          # Storage setup with debug
+          echo "Creating storage account if not exists..."
           if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "name" -o tsv 2>/dev/null; then
             az storage account create \
               --name $STORAGE_ACCOUNT_NAME \
               --resource-group drupal-rg-user1-5ad1bbb1 \
               --sku Standard_LRS \
               --location centralus
+            echo "Storage account created: $STORAGE_ACCOUNT_NAME"
+          else
+            echo "Storage account exists: $STORAGE_ACCOUNT_NAME"
           fi
+
           STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "[0].value" -o tsv)
+          echo "Storage key retrieved"
+
+          echo "Creating file share if not exists..."
           if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
             az storage share create \
               --account-name $STORAGE_ACCOUNT_NAME \
               --account-key $STORAGE_KEY \
               --name $FILE_SHARE_NAME
+            echo "File share created: $FILE_SHARE_NAME"
+          else
+            echo "File share exists: $FILE_SHARE_NAME"
           fi
 
           # Deploy container
@@ -96,10 +108,10 @@ jobs:
             --memory 4 \
             --cpu 2
 
-          echo "Waiting for container to start (180 seconds)..."
-          sleep 180
+          echo "Waiting for container to start (240 seconds)..."
+          sleep 240
 
-          # Verify initial deployment
+          # Verify deployment
           STATE=$(az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "instanceView.state" -o tsv)
           echo "Container state: $STATE"
           if [ "$STATE" != "Running" ]; then
@@ -108,9 +120,9 @@ jobs:
             exit 1
           fi
 
-          echo "Checking volume mount..."
-          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ls -la /var/www/html/sites/default" || echo "Mount failed!"
-          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "cat /var/www/html/sites/default/settings.php" || echo "Settings file still missing!"
+          # Check volume and settings
+          echo "Container logs..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
 
           URL="http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
           curl -v "$URL" > curl_initial.txt 2>&1
@@ -119,7 +131,6 @@ jobs:
           if [ "$STATUS_CODE" != "200" ] && [ "$STATUS_CODE" != "302" ]; then
             echo "Site not loading initially! Curl output:"
             cat curl_initial.txt
-            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
             exit 1
           fi
 
@@ -136,9 +147,8 @@ jobs:
             exit 1
           fi
 
-          echo "Checking persistence after restart..."
-          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ls -la /var/www/html/sites/default" || echo "Mount failed after restart!"
-          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "cat /var/www/html/sites/default/settings.php" || echo "Settings file missing after restart!"
+          echo "Container logs after restart..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
 
           curl -v "$URL" > curl_restart.txt 2>&1
           RESTART_STATUS=$(grep -o "HTTP/1.1 [0-9]\+" curl_restart.txt | awk '{print $2}' || echo "No response")
@@ -146,7 +156,6 @@ jobs:
           if [ "$RESTART_STATUS" != "200" ]; then
             echo "Site not loading after restart! Curl output:"
             cat curl_restart.txt
-            az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
             exit 1
           fi
 
