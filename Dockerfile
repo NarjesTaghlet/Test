@@ -25,7 +25,7 @@ RUN composer create-project drupal/recommended-project:10.2 . \
     && chmod 775 /var/www/html/web/sites/default/files
 
 # Copy initialization script
-COPY init-drupal.sh /usr/local/bin/init.sh
+COPY init.sh /usr/local/bin/init.sh
 RUN chmod +x /usr/local/bin/init.sh \
     && ls -la /usr/local/bin/init.sh  # Vérifie que le fichier est bien là
 
