@@ -19,36 +19,51 @@ jobs:
           az login --use-device-code
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
+      - name: Create Storage Account and File Share (if not exists)
+        run: |
+          STORAGE_ACCOUNT_NAME="drupalstorage${{ github.event.inputs.user_id }}"
+          FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}"
+          # Create storage account if it doesn't exist
+          if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query name -o tsv 2>/dev/null; then
+            az storage account create \
+              --name $STORAGE_ACCOUNT_NAME \
+              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --location centralus \
+              --sku Standard_LRS
+            echo "Created storage account: $STORAGE_ACCOUNT_NAME"
+          fi
+          # Get storage account key
+          STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query '[0].value' -o tsv)
+          # Create file share if it doesn't exist
+          if ! az storage share-rm exists --storage-account $STORAGE_ACCOUNT_NAME --name $FILE_SHARE_NAME --query exists -o tsv | grep -q true; then
+            az storage share-rm create \
+              --storage-account $STORAGE_ACCOUNT_NAME \
+              --name $FILE_SHARE_NAME \
+              --quota 1024 \
+              --enabled-protocols SMB
+            echo "Created file share: $FILE_SHARE_NAME"
+          fi
+          echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_ENV
+          echo "FILE_SHARE_NAME=$FILE_SHARE_NAME" >> $GITHUB_ENV
+          echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
+
       - name: Retrieve or Create Database
         run: |
           USER_ID="${{ github.event.inputs.user_id }}"
-          # Check for existing database name in a tracking file
+          STORAGE_ACCOUNT_NAME="${{ env.STORAGE_ACCOUNT_NAME }}"
+          STORAGE_KEY="${{ env.STORAGE_KEY }}"
+          # Check for existing database name in Azure Blob Storage
+          DB_NAME=""
+          az storage blob download \
+            --account-name $STORAGE_ACCOUNT_NAME \
+            --account-key $STORAGE_KEY \
+            --container-name db-tracker \
+            --name "db-tracker-$USER_ID.json" \
+            --file db-tracker.json || true
           if [ -f "db-tracker.json" ]; then
-            DB_NAME=$(cat db-tracker.json | jq -r ".\"$USER_ID\"")
-            if [ "$DB_NAME" != "null" ]; then
-              echo "Reusing existing database: $DB_NAME"
-            else
-              TIMESTAMP=$(date +%s)
-              DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
-              az mysql flexible-server db create \
-                --resource-group drupal-rg-user1-5ad1bbb1 \
-                --server-name drupal-db-user1-5ad1bbb1 \
-                --database-name $DB_NAME
-              echo "Created new database: $DB_NAME"
-              # Update tracking file
-              if [ -s "db-tracker.json" ]; then
-                jq --arg user_id "$USER_ID" --arg db_name "$DB_NAME" \
-                  '.[$user_id] = $db_name' db-tracker.json > tmp.json && mv tmp.json db-tracker.json
-              else
-                echo "{\"$USER_ID\": \"$DB_NAME\"}" > db-tracker.json
-              fi
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git add db-tracker.json
-              git commit -m "Track database name for user $USER_ID"
-              git push origin main
-            fi
-          else
+            DB_NAME=$(cat db-tracker.json | jq -r '.db_name')
+          fi
+          if [ -z "$DB_NAME" ]; then
             TIMESTAMP=$(date +%s)
             DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
             az mysql flexible-server db create \
@@ -56,19 +71,31 @@ jobs:
               --server-name drupal-db-user1-5ad1bbb1 \
               --database-name $DB_NAME
             echo "Created new database: $DB_NAME"
-            echo "{\"$USER_ID\": \"$DB_NAME\"}" > db-tracker.json
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add db-tracker.json
-            git commit -m "Track database name for user $USER_ID"
-            git push origin main
+            # Create container in Blob Storage if it doesn't exist
+            az storage container create \
+              --account-name $STORAGE_ACCOUNT_NAME \
+              --account-key $STORAGE_KEY \
+              --name db-tracker || true
+            # Save database name to Blob Storage
+            echo "{\"db_name\": \"$DB_NAME\"}" > db-tracker.json
+            az storage blob upload \
+              --account-name $STORAGE_ACCOUNT_NAME \
+              --account-key $STORAGE_KEY \
+              --container-name db-tracker \
+              --name "db-tracker-$USER_ID.json" \
+              --file db-tracker.json
+          else
+            echo "Reusing existing database: $DB_NAME"
           fi
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
 
-      - name: Deploy Drupal to ACI with Existing Database
+      - name: Deploy Drupal to ACI with Persistent Volume
         run: |
           INSTANCE_ID=$(date +%s)
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          STORAGE_ACCOUNT_NAME="${{ env.STORAGE_ACCOUNT_NAME }}"
+          FILE_SHARE_NAME="${{ env.FILE_SHARE_NAME }}"
+          STORAGE_KEY="${{ env.STORAGE_KEY }}"
           # Delete existing container if it exists
           if az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query id -o tsv > /dev/null 2>&1; then
             az container delete --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --yes
@@ -94,7 +121,11 @@ jobs:
             --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
             --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
             --memory 4 \
-            --cpu 2
+            --cpu 2 \
+            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
+            --azure-file-volume-account-key $STORAGE_KEY \
+            --azure-file-volume-share-name $FILE_SHARE_NAME \
+            --azure-file-volume-mount-path /var/www/html/sites/default/files
           echo "Waiting for container to start (60 seconds)..."
           sleep 60
           echo "Checking container logs..."
