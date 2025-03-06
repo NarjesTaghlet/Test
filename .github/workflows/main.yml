@@ -56,7 +56,6 @@ jobs:
             --registry-login-server drupalacrnarjes.azurecr.io \
             --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
             --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
-            
             --memory 4 \
             --cpu 2
           echo "Waiting for container to start (60 seconds)..."
