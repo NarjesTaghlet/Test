@@ -1,31 +1,25 @@
-FROM drupal:10-apache
+FROM php:8.2-apache
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
     libpng-dev libjpeg-dev libpq-dev libzip-dev zip unzip git \
     default-mysql-client \
     && docker-php-ext-configure gd --with-jpeg \
     && docker-php-ext-install gd pdo pdo_mysql zip
 
-# Install Drush
-RUN composer require drush/drush
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-# Set working directory
 WORKDIR /var/www/html
+RUN composer create-project drupal/recommended-project:10.x . \
+    && chown -R www-data:www-data /var/www/html
 
-# Pre-create settings.php and files directory
-RUN cp /var/www/html/sites/default/default.settings.php /var/www/html/sites/default/settings.php \
-    && chown www-data:www-data /var/www/html/sites/default/settings.php \
-    && chmod 664 /var/www/html/sites/default/settings.php \
-    && mkdir -p /var/www/html/sites/default/files \
-    && chown www-data:www-data /var/www/html/sites/default/files \
-    && chmod 775 /var/www/html/sites/default/files
+COPY init.sh /usr/local/bin/init.sh
 
-# Copy initialization script
-COPY init.sh /init.sh
-RUN chmod +x /init.sh
+#COPY DigiCertGlobalRootCA.crt.pem /etc/ssl/certs/
+#RUN ls -l /etc/ssl/certs/DigiCertGlobalRootCA.crt.pem || { echo "Certificate not found!"; exit 1; }
+RUN chmod +x /usr/local/bin/init.sh
 
-EXPOSE 80
+RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot /var/www/html/web|' /etc/apache2/sites-available/000-default.conf \
+    && a2enmod rewrite \
+    && echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
-ENTRYPOINT ["init.sh"]
-CMD ["apache2-foreground"]
+CMD ["/usr/local/bin/init.sh"]
