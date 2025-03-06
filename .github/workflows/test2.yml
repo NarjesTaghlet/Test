@@ -99,7 +99,7 @@ jobs:
             az container create \
               --resource-group drupal-rg-user1-5ad1bbb1 \
               --name $CONTAINER_NAME \
-              --image drupalacrnarjes.azurecr.io/drupal-custom:latest \
+              --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
               --dns-name-label drupal-$USER_ID-narjes \
               --ports 80 \
               --os-type Linux \
