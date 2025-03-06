@@ -1,4 +1,4 @@
-name: Test2
+name: test2
 
 on:
   workflow_dispatch:
@@ -50,14 +50,16 @@ jobs:
           STORAGE_ACCOUNT_NAME="${{ env.STORAGE_ACCOUNT_NAME }}"
           STORAGE_KEY="${{ env.STORAGE_KEY }}"
           DB_NAME=""
+          # Télécharger le tracker ou ignorer s'il n'existe pas
           az storage blob download \
             --account-name $STORAGE_ACCOUNT_NAME \
             --account-key $STORAGE_KEY \
             --container-name db-tracker \
             --name "db-tracker-$USER_ID.json" \
-            --file db-tracker.json || true
+            --file db-tracker.json 2>/dev/null || true
           if [ -f "db-tracker.json" ]; then
-            DB_NAME=$(cat db-tracker.json | jq -r '.db_name')
+            DB_NAME=$(jq -r '.db_name' db-tracker.json)
+            echo "Reusing existing database: $DB_NAME"
           fi
           if [ -z "$DB_NAME" ]; then
             TIMESTAMP=$(date +%s)
@@ -78,12 +80,10 @@ jobs:
               --container-name db-tracker \
               --name "db-tracker-$USER_ID.json" \
               --file db-tracker.json
-          else
-            echo "Reusing existing database: $DB_NAME"
           fi
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
 
-      - name: Deploy Drupal to ACI with Persistent Volume
+      - name: Deploy Drupal to ACI with Persistent Storage
         run: |
           USER_ID="${{ github.event.inputs.user_id }}"
           CONTAINER_NAME="drupal-$USER_ID"
@@ -92,14 +92,14 @@ jobs:
           STORAGE_KEY="${{ env.STORAGE_KEY }}"
           # Vérifier si le conteneur existe déjà
           if az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query id -o tsv > /dev/null 2>&1; then
-            echo "Container $CONTAINER_NAME already exists. Restarting it..."
+            echo "Container $CONTAINER_NAME already exists, restarting it..."
             az container restart --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
           else
             echo "Creating new container: $CONTAINER_NAME"
             az container create \
               --resource-group drupal-rg-user1-5ad1bbb1 \
               --name $CONTAINER_NAME \
-              --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
+              --image drupalacrnarjes.azurecr.io/drupal-custom:latest \
               --dns-name-label drupal-$USER_ID-narjes \
               --ports 80 \
               --os-type Linux \
