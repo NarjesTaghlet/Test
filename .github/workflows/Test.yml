@@ -1,39 +1,45 @@
-name: Test 
+name: Deploy Drupal on ACI with Persistent Storage and Database
 
 on:
   workflow_dispatch:
     inputs:
       user_id:
-        description: 'Unique user ID'
+        description: 'User ID for unique resource naming'
         required: true
+        type: string
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Login to Azure with device code
-        run: |
-          az login --use-device-code
-          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Create Storage Account and File Share (if not exists)
+        id: create_storage
         run: |
           STORAGE_ACCOUNT_NAME="drupalstorage${{ github.event.inputs.user_id }}"
           FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}"
+          RESOURCE_GROUP="drupal-rg-user1-5ad1bbb1"
+
           # Create storage account if it doesn't exist
-          if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query name -o tsv 2>/dev/null; then
+          if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query name -o tsv 2>/dev/null; then
             az storage account create \
               --name $STORAGE_ACCOUNT_NAME \
-              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --resource-group $RESOURCE_GROUP \
               --location centralus \
               --sku Standard_LRS
             echo "Created storage account: $STORAGE_ACCOUNT_NAME"
           fi
+
           # Get storage account key
-          STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query '[0].value' -o tsv)
+          STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query '[0].value' -o tsv)
+
           # Create file share if it doesn't exist
           if ! az storage share-rm exists --storage-account $STORAGE_ACCOUNT_NAME --name $FILE_SHARE_NAME --query exists -o tsv | grep -q true; then
             az storage share-rm create \
@@ -43,73 +49,73 @@ jobs:
               --enabled-protocols SMB
             echo "Created file share: $FILE_SHARE_NAME"
           fi
+
+          # Export variables for later steps
           echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_ENV
           echo "FILE_SHARE_NAME=$FILE_SHARE_NAME" >> $GITHUB_ENV
           echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
 
-      - name: Retrieve or Create Database
+      - name: Create Azure Database for MySQL (if not exists)
+        id: create_db
         run: |
-          USER_ID="${{ github.event.inputs.user_id }}"
-          STORAGE_ACCOUNT_NAME="${{ env.STORAGE_ACCOUNT_NAME }}"
-          STORAGE_KEY="${{ env.STORAGE_KEY }}"
-          # Check for existing database name in Azure Blob Storage
-          DB_NAME=""
-          az storage blob download \
-            --account-name $STORAGE_ACCOUNT_NAME \
-            --account-key $STORAGE_KEY \
-            --container-name db-tracker \
-            --name "db-tracker-$USER_ID.json" \
-            --file db-tracker.json || true
-          if [ -f "db-tracker.json" ]; then
-            DB_NAME=$(cat db-tracker.json | jq -r '.db_name')
-          fi
-          if [ -z "$DB_NAME" ]; then
-            TIMESTAMP=$(date +%s)
-            DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
-            az mysql flexible-server db create \
-              --resource-group drupal-rg-user1-5ad1bbb1 \
-              --server-name drupal-db-user1-5ad1bbb1 \
-              --database-name $DB_NAME
-            echo "Created new database: $DB_NAME"
-            # Create container in Blob Storage if it doesn't exist
-            az storage container create \
-              --account-name $STORAGE_ACCOUNT_NAME \
-              --account-key $STORAGE_KEY \
-              --name db-tracker || true
-            # Save database name to Blob Storage
-            echo "{\"db_name\": \"$DB_NAME\"}" > db-tracker.json
-            az storage blob upload \
-              --account-name $STORAGE_ACCOUNT_NAME \
-              --account-key $STORAGE_KEY \
-              --container-name db-tracker \
-              --name "db-tracker-$USER_ID.json" \
-              --file db-tracker.json
-          else
-            echo "Reusing existing database: $DB_NAME"
-          fi
-          echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
+          DB_NAME="drupaldb${{ github.event.inputs.user_id }}"
+          DB_SERVER_NAME="drupal-db-server-${{ github.event.inputs.user_id }}"
+          RESOURCE_GROUP="drupal-rg-user1-5ad1bbb1"
+          DB_USER="drupaluser"
+          DB_PASSWORD="$(openssl rand -base64 16)"
 
-      - name: Deploy Drupal to ACI with Persistent Volume
+          # Create MySQL server if it doesn't exist
+          if ! az mysql server show --name $DB_SERVER_NAME --resource-group $RESOURCE_GROUP --query name -o tsv 2>/dev/null; then
+            az mysql server create \
+              --name $DB_SERVER_NAME \
+              --resource-group $RESOURCE_GROUP \
+              --location centralus \
+              --admin-user $DB_USER \
+              --admin-password $DB_PASSWORD \
+              --sku-name B_Gen5_1 \
+              --storage-size 5120
+            echo "Created MySQL server: $DB_SERVER_NAME"
+          fi
+
+          # Create database if it doesn't exist
+          if ! az mysql db show --name $DB_NAME --server-name $DB_SERVER_NAME --resource-group $RESOURCE_GROUP --query name -o tsv 2>/dev/null; then
+            az mysql db create \
+              --name $DB_NAME \
+              --server-name $DB_SERVER_NAME \
+              --resource-group $RESOURCE_GROUP
+            echo "Created database: $DB_NAME"
+          fi
+
+          # Export variables for later steps
+          echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
+          echo "DB_SERVER_NAME=$DB_SERVER_NAME" >> $GITHUB_ENV
+          echo "DB_USER=$DB_USER" >> $GITHUB_ENV
+          echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
+
+      - name: Deploy Drupal on Azure Container Instances (ACI)
         run: |
-          INSTANCE_ID=$(date +%s)
-          CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          RESOURCE_GROUP="drupal-rg-user1-5ad1bbb1"
+          CONTAINER_NAME="drupal-container-${{ github.event.inputs.user_id }}"
           STORAGE_ACCOUNT_NAME="${{ env.STORAGE_ACCOUNT_NAME }}"
           FILE_SHARE_NAME="${{ env.FILE_SHARE_NAME }}"
           STORAGE_KEY="${{ env.STORAGE_KEY }}"
-          # Delete existing container if it exists
-          if az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query id -o tsv > /dev/null 2>&1; then
-            az container delete --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --yes
-            echo "Deleted existing container: $CONTAINER_NAME"
-          fi
+          DB_NAME="${{ env.DB_NAME }}"
+          DB_SERVER_NAME="${{ env.DB_SERVER_NAME }}"
+          DB_USER="${{ env.DB_USER }}"
+          DB_PASSWORD="${{ env.DB_PASSWORD }}"
+
           az container create \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
+            --resource-group $RESOURCE_GROUP \
             --name $CONTAINER_NAME \
-            --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
-            --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
+            --image drupal:latest \
             --ports 80 \
-            --os-type Linux \
+            --dns-name-label $CONTAINER_NAME \
+            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
+            --azure-file-volume-account-key $STORAGE_KEY \
+            --azure-file-volume-share-name $FILE_SHARE_NAME \
+            --azure-file-volume-mount-path /var/www/html/sites/default/files \
             --environment-variables \
-              DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
+             DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
               DRUPAL_DB_USER=${{ secrets.DB_USER }} \
               DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
@@ -117,22 +123,4 @@ jobs:
               DRUPAL_ADMIN_PASSWORD=admin \
               DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
               DRUPAL_DB_PREFIX="user_${{ github.event.inputs.user_id }}_${INSTANCE_ID}_" \
-            --registry-login-server drupalacrnarjes.azurecr.io \
-            --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
-            --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
-            --memory 4 \
-            --cpu 2 \
-            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
-            --azure-file-volume-account-key $STORAGE_KEY \
-            --azure-file-volume-share-name $FILE_SHARE_NAME \
-            --azure-file-volume-mount-path /var/www/html/
-            
-            
-            
-          echo "Waiting for container to start (60 seconds)..."
-          sleep 60
-          echo "Checking container logs..."
-          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
-          echo "Checking container status..."
-          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
-          echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+            --restart-policy Always
