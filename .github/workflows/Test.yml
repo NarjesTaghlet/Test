@@ -125,9 +125,8 @@ jobs:
             --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
             --azure-file-volume-account-key $STORAGE_KEY \
             --azure-file-volume-share-name $FILE_SHARE_NAME \
-            --azure-file-volume-mount-path /var/www/html/sites/default/ \
-            --azure-file-volume-mount-path /var/www/html/modules/ \
-            --azure-file-volume-mount-path /var/www/html/themes/ 
+            --azure-file-volume-mount-path /var/www/html/sites/default/ 
+            
             
             
           echo "Waiting for container to start (60 seconds)..."
