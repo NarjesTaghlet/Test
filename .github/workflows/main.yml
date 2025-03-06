@@ -31,14 +31,14 @@ jobs:
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
           echo "Created database: $DB_NAME"
 
-      - name: Deploy Drupal to ACI with New Database and Persistent Volume
+      - name: Deploy Drupal to ACI with Persistent Azure File Share
         run: |
           INSTANCE_ID=$(date +%s)
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
-          STORAGE_ACCOUNT_NAME="drupalstorage${{ github.event.inputs.user_id }}"  # Unique storage account name
-          FILE_SHARE_NAME="drupal-share-${{ github.event.inputs.user_id }}-$INSTANCE_ID"  # Unique file share per instance
+          STORAGE_ACCOUNT_NAME="drupalstg${{ github.event.inputs.user_id }}${INSTANCE_ID: -6}"
+          FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          STORAGE_ACCOUNT_NAME=$(echo "$STORAGE_ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]' | cut -c 1-24)
 
-          # Check if storage account exists, create if it doesn’t
           if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "name" -o tsv 2>/dev/null; then
             az storage account create \
               --name $STORAGE_ACCOUNT_NAME \
@@ -48,10 +48,8 @@ jobs:
             echo "Created storage account: $STORAGE_ACCOUNT_NAME"
           fi
 
-          # Get storage account key
           STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "[0].value" -o tsv)
 
-          # Create Azure File Share if it doesn’t exist
           if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
             az storage share create \
               --account-name $STORAGE_ACCOUNT_NAME \
@@ -60,7 +58,6 @@ jobs:
             echo "Created file share: $FILE_SHARE_NAME"
           fi
 
-          # Deploy container with Azure File Share for persistence
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --name $CONTAINER_NAME \
@@ -80,17 +77,65 @@ jobs:
             --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
             --azure-file-volume-account-key $STORAGE_KEY \
             --azure-file-volume-share-name $FILE_SHARE_NAME \
-            --azure-file-volume-mount-path /var/www/html/ \
+            --azure-file-volume-mount-path /var/www/html/sites/default/files \
             --registry-login-server drupalacrnarjes.azurecr.io \
             --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
             --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
             --memory 4 \
             --cpu 2
 
-          echo "Waiting for container to start (60 seconds)..."
-          sleep 60
-          echo "Checking container logs..."
-          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
-          echo "Checking container status..."
-          az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
-          echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+          echo "Waiting for container to start (180 seconds)..."
+          sleep 180
+
+          # Check container state
+          STATE=$(az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "instanceView.state" -o tsv)
+          echo "Container state: $STATE"
+          if [ "$STATE" != "Running" ]; then
+            echo "Container is not running! Exiting..."
+            exit 1
+          fi
+
+          # Check web server
+          echo "Checking if web server is running..."
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ps aux | grep -E 'apache|httpd|php-fpm'" || echo "Web server not running!"
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "netstat -tuln | grep 80" || echo "Port 80 not open!"
+
+          # Check file share
+          echo "Checking file share mount..."
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "ls -la /var/www/html/sites/default/files" > mount_check.txt 2>&1
+          if grep -q "No such file" mount_check.txt || [ ! -s mount_check.txt ]; then
+            echo "File share not mounted! Output:"
+            cat mount_check.txt
+            exit 1
+          else
+            echo "File share mounted. Checking writability..."
+            az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "touch /var/www/html/sites/default/files/test.txt && echo 'Writable'" || echo "File share not writable!"
+          fi
+
+          # Check database
+          echo "Checking database connection..."
+          az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "mysql -h drupal-db-user1-5ad1bbb1.mysql.database.azure.com -u ${{ secrets.DB_USER }} -p${{ secrets.DB_PASSWORD }} ${{ env.DB_NAME }} -e 'SHOW TABLES;'" || echo "Database connection failed!"
+
+          # Check logs
+          echo "Checking logs..."
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME > logs.txt
+          if [ -s logs.txt ]; then
+            cat logs.txt
+          else
+            echo "No stdout logs. Checking Apache logs..."
+            az container exec --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --exec-command "cat /var/log/apache2/error.log" || echo "No Apache logs accessible"
+          fi
+
+          # Test site
+          echo "Testing site..."
+          URL="http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+          curl -v "$URL" > curl_output.txt 2>&1
+          STATUS_CODE=$(grep -o "HTTP/1.1 [0-9]\+" curl_output.txt | awk '{print $2}' || echo "No response")
+          echo "HTTP Status Code: $STATUS_CODE"
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "Site not loading! Curl output:"
+            cat curl_output.txt
+            exit 1
+          fi
+
+          echo "Drupal site URL: $URL"
