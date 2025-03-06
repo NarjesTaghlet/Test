@@ -25,5 +25,5 @@ RUN chmod +x /init-drupal.sh
 
 EXPOSE 80
 
-ENTRYPOINT ["/init-drupal.sh"]
+ENTRYPOINT ["init.sh"]
 CMD ["apache2-foreground"]
