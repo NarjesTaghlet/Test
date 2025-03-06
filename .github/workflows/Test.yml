@@ -1,87 +1,78 @@
-name: Test Workflow 2 
-
+name: Test Workflow
 on:
   workflow_dispatch:
     inputs:
       user_id:
         description: 'Unique user ID'
         required: true
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Login to Azure with device code
+      - name: Login to Azure
         run: |
           az login --use-device-code
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-
-      - name: Create New Database
+      - name: Build Docker Image
         run: |
-          TIMESTAMP=$(date +%s)
+          docker build -t drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }} .
+          echo "Docker image built"
+      - name: Login to ACR
+        run: |
+          az acr login --name drupalacrnarjes
+      - name: Push Docker Image
+        run: |
+          docker push drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }}
+      - name: Create or Use Database
+        run: |
           USER_ID="${{ github.event.inputs.user_id }}"
-          DB_NAME="drupaldb-$USER_ID-$TIMESTAMP"
-          az mysql flexible-server db create \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --server-name drupal-db-user1-5ad1bbb1 \
-            --database-name $DB_NAME
+          DB_NAME="drupaldb-$USER_ID"
+          if ! az mysql flexible-server db show --resource-group drupal-rg-user1-5ad1bbb1 --server-name drupal-db-user1-5ad1bbb1 --database-name $DB_NAME --query "name" -o tsv 2>/dev/null; then
+            az mysql flexible-server db create \
+              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --server-name drupal-db-user1-5ad1bbb1 \
+              --database-name $DB_NAME
+            echo "Created database: $DB_NAME"
+          else
+            echo "Database $DB_NAME already exists"
+          fi
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
-          echo "Created database: $DB_NAME"
-
-      - name: Deploy Drupal to ACI with New Database and Persistent Volume
+      - name: Deploy to ACI
         run: |
           INSTANCE_ID=$(date +%s)
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
           STORAGE_ACCOUNT_NAME="drupalstg${{ github.event.inputs.user_id }}${INSTANCE_ID: -6}"
           FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
           STORAGE_ACCOUNT_NAME=$(echo "$STORAGE_ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]' | cut -c 1-24)
-
-          # Create storage account if it doesn't exist
           if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "name" -o tsv 2>/dev/null; then
             az storage account create \
               --name $STORAGE_ACCOUNT_NAME \
               --resource-group drupal-rg-user1-5ad1bbb1 \
               --sku Standard_LRS \
               --location centralus
-            echo "Storage account created: $STORAGE_ACCOUNT_NAME"
           fi
-
-          # Get storage account key
           STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "[0].value" -o tsv)
-
-          # Create file share if it doesn't exist
           if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
             az storage share create \
               --account-name $STORAGE_ACCOUNT_NAME \
               --account-key $STORAGE_KEY \
               --name $FILE_SHARE_NAME
-            echo "File share created: $FILE_SHARE_NAME"
           fi
-
-          # Récupérer identifiants ACR
           ACR_USERNAME=$(az acr credential show --name drupalacrnarjes --query username -o tsv)
           ACR_PASSWORD=$(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv)
-
-          # Deploy with persistent volume
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --name $CONTAINER_NAME \
-            --image drupalacrnarjes.azurecr.io/drupal:1741044593 \
+            --image drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }} \
             --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
             --ports 80 \
-            --os-type Linux \
             --environment-variables \
               DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
               DRUPAL_DB_NAME=${{ env.DB_NAME }} \
               DRUPAL_DB_USER=${{ secrets.DB_USER }} \
               DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-              DRUPAL_ADMIN_USERNAME=admin \
-              DRUPAL_ADMIN_PASSWORD=admin \
-              DRUPAL_SITE_NAME="Drupal Site ${{ github.event.inputs.user_id }}" \
-              DRUPAL_DB_PREFIX="user_${{ github.event.inputs.user_id }}_${INSTANCE_ID}_" \
             --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
             --azure-file-volume-account-key $STORAGE_KEY \
             --azure-file-volume-share-name $FILE_SHARE_NAME \
@@ -91,15 +82,13 @@ jobs:
             --registry-password "$ACR_PASSWORD" \
             --memory 4 \
             --cpu 2
-
-          echo "Waiting for container to start (60 seconds)..."
           sleep 60
-          echo "Checking container logs..."
-          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
-          echo "Checking container status..."
+          echo "Logs:"
+          az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "No logs"
+          echo "Status:"
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState" -o tsv
           URL="http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
-          echo "Drupal site URL: $URL"
+          echo "URL: $URL"
           curl -v "$URL" > curl_initial.txt 2>&1
           STATUS_CODE=$(grep -o "HTTP/1.1 [0-9]\+" curl_initial.txt | awk '{print $2}' || echo "No response")
-          echo "Initial HTTP Status Code: $STATUS_CODE"
+          echo "HTTP Status: $STATUS_CODE"
