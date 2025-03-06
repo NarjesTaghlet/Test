@@ -27,5 +27,5 @@ RUN chmod +x /init.sh
 
 EXPOSE 80
 
-ENTRYPOINT ["/init.sh"]
+ENTRYPOINT ["init.sh"]
 CMD ["apache2-foreground"]
