@@ -17,14 +17,14 @@ jobs:
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
       - name: Build Docker Image
         run: |
-          docker build -t drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }} .
+          docker build -t drupalacrnarjes.azurecr.io/drupal:latest .
           echo "Docker image built"
       - name: Login to ACR
         run: |
           az acr login --name drupalacrnarjes
       - name: Push Docker Image
         run: |
-          docker push drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }}
+          docker push drupalacrnarjes.azurecr.io/drupal:latest
       - name: Create or Use Database
         run: |
           USER_ID="${{ github.event.inputs.user_id }}"
@@ -39,56 +39,91 @@ jobs:
             echo "Database $DB_NAME already exists"
           fi
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
-      - name: Deploy to ACI
+      - name: Create or Use Storage Account and File Share
         run: |
-          INSTANCE_ID=$(date +%s)
-          CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
-          STORAGE_ACCOUNT_NAME="drupalstg${{ github.event.inputs.user_id }}${INSTANCE_ID: -6}"
-          FILE_SHARE_NAME="drupal-files-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          USER_ID="${{ github.event.inputs.user_id }}"
+          STORAGE_ACCOUNT_NAME="drupalstg${USER_ID}"
+          FILE_SHARE_NAME="drupal-files-${USER_ID}"
           STORAGE_ACCOUNT_NAME=$(echo "$STORAGE_ACCOUNT_NAME" | tr '[:upper:]' '[:lower:]' | cut -c 1-24)
+          echo "Checking storage account: $STORAGE_ACCOUNT_NAME"
           if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "name" -o tsv 2>/dev/null; then
             az storage account create \
               --name $STORAGE_ACCOUNT_NAME \
               --resource-group drupal-rg-user1-5ad1bbb1 \
               --sku Standard_LRS \
-              --location centralus
+              --location centralus \
+              --output none
+            echo "Storage account created: $STORAGE_ACCOUNT_NAME"
+          else
+            echo "Storage account $STORAGE_ACCOUNT_NAME already exists"
           fi
           STORAGE_KEY=$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group drupal-rg-user1-5ad1bbb1 --query "[0].value" -o tsv)
-          if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
+          if [ -z "$STORAGE_KEY" ]; then
+            echo "Error: Failed to retrieve storage key!"
+            exit 1
+          fi
+          echo "Checking file share: $FILE_SHARE_NAME"
+          if ! az storage share exists --account-name $STORAGE_ACCOUNT_NAME --account-key "$STORAGE_KEY" --name $FILE_SHARE_NAME --query "exists" -o tsv | grep -q "true"; then
             az storage share create \
               --account-name $STORAGE_ACCOUNT_NAME \
-              --account-key $STORAGE_KEY \
-              --name $FILE_SHARE_NAME
+              --account-key "$STORAGE_KEY" \
+              --name $FILE_SHARE_NAME \
+              --output none
+            echo "File share created: $FILE_SHARE_NAME"
+          else
+            echo "File share $FILE_SHARE_NAME already exists"
           fi
+          echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_ENV
+          echo "FILE_SHARE_NAME=$FILE_SHARE_NAME" >> $GITHUB_ENV
+          echo "STORAGE_KEY=$STORAGE_KEY" >> $GITHUB_ENV
+      - name: Deploy or Restart ACI Container
+        run: |
+          USER_ID="${{ github.event.inputs.user_id }}"
+          CONTAINER_NAME="drupal-${USER_ID}"
           ACR_USERNAME=$(az acr credential show --name drupalacrnarjes --query username -o tsv)
           ACR_PASSWORD=$(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv)
-          az container create \
-            --resource-group drupal-rg-user1-5ad1bbb1 \
-            --name $CONTAINER_NAME \
-            --image drupalacrnarjes.azurecr.io/drupal:${{ github.run_id }} \
-            --dns-name-label drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes \
-            --os-type Linux \
-            --ports 80 \
-            --environment-variables \
-              DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
-              DRUPAL_DB_NAME=${{ env.DB_NAME }} \
-              DRUPAL_DB_USER=${{ secrets.DB_USER }} \
-              DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
-            --azure-file-volume-account-key $STORAGE_KEY \
-            --azure-file-volume-share-name $FILE_SHARE_NAME \
-            --azure-file-volume-mount-path /var/www/html/web/sites/default \
-            --registry-login-server drupalacrnarjes.azurecr.io \
-            --registry-username "$ACR_USERNAME" \
-            --registry-password "$ACR_PASSWORD" \
-            --memory 4 \
-            --cpu 2
+          if az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState" -o tsv 2>/dev/null | grep -q "Succeeded"; then
+            echo "Container $CONTAINER_NAME exists, restarting..."
+            az container restart --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME
+          else
+            echo "Creating container $CONTAINER_NAME..."
+            az container create \
+              --resource-group drupal-rg-user1-5ad1bbb1 \
+              --name $CONTAINER_NAME \
+              --image drupalacrnarjes.azurecr.io/drupal:latest \
+              --dns-name-label drupal-${USER_ID}-narjes \
+              --ports 80 \
+              --os-type Linux \
+              --environment-variables \
+                DRUPAL_DB_HOST=drupal-db-user1-5ad1bbb1.mysql.database.azure.com \
+                DRUPAL_DB_NAME=${{ env.DB_NAME }} \
+                DRUPAL_DB_USER=${{ secrets.DB_USER }} \
+                DRUPAL_DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+                DRUPAL_ADMIN_USERNAME=admin \
+                DRUPAL_ADMIN_PASSWORD=admin \
+                DRUPAL_SITE_NAME="Drupal Site $USER_ID" \
+              --azure-file-volume-account-name "${{ env.STORAGE_ACCOUNT_NAME }}" \
+              --azure-file-volume-account-key "${{ env.STORAGE_KEY }}" \
+              --azure-file-volume-share-name "${{ env.FILE_SHARE_NAME }}" \
+              --azure-file-volume-mount-path "/var/www/html/web/sites/default" \
+              --registry-login-server drupalacrnarjes.azurecr.io \
+              --registry-username "$ACR_USERNAME" \
+              --registry-password "$ACR_PASSWORD" \
+              --memory 4 \
+              --cpu 2 \
+              --output json > container_create_output.json
+            if [ $? -ne 0 ]; then
+              echo "Error: Container creation failed!"
+              cat container_create_output.json
+              exit 1
+            fi
+          fi
           sleep 60
           echo "Logs:"
           az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "No logs"
           echo "Status:"
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState" -o tsv
-          URL="http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
+          URL="http://drupal-${USER_ID}-narjes.centralus.azurecontainer.io"
           echo "URL: $URL"
           curl -v "$URL" > curl_initial.txt 2>&1
           STATUS_CODE=$(grep -o "HTTP/1.1 [0-9]\+" curl_initial.txt | awk '{print $2}' || echo "No response")
