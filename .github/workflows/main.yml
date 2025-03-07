@@ -19,8 +19,6 @@ jobs:
           az login --use-device-code
           az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-
-
       - name: Create New Database
         run: |
           TIMESTAMP=$(date +%s)
@@ -33,10 +31,26 @@ jobs:
           echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
           echo "Created database: $DB_NAME"
 
-      - name: Deploy Drupal to ACI with New Database
+      - name: Create Azure File Share for mounting
+        run: |
+          # Replace with your storage account name and resource group
+          STORAGE_ACCOUNT_NAME="mystorageaccount"
+          FILE_SHARE_NAME="drupal-data"
+          
+          # Create file share if not exists
+          az storage share create \
+            --name $FILE_SHARE_NAME \
+            --account-name $STORAGE_ACCOUNT_NAME \
+            --account-key $(az storage account keys list --resource-group drupal-rg-user1-5ad1bbb1 --account-name $STORAGE_ACCOUNT_NAME --query '[0].value' -o tsv)
+
+          echo "Created file share: $FILE_SHARE_NAME"
+
+      - name: Deploy Drupal to ACI with New Database and Mount Volume
         run: |
           INSTANCE_ID=$(date +%s)
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
+          
+          # Create ACI container and mount Azure File Share
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
             --name $CONTAINER_NAME \
@@ -57,13 +71,19 @@ jobs:
             --registry-username $(az acr credential show --name drupalacrnarjes --query username -o tsv) \
             --registry-password $(az acr credential show --name drupalacrnarjes --query passwords[0].value -o tsv) \
             --memory 4 \
-            --cpu 2
+            --cpu 2 \
+            --azure-file-volume-account-name $STORAGE_ACCOUNT_NAME \
+            --azure-file-volume-account-key $(az storage account keys list --resource-group drupal-rg-user1-5ad1bbb1 --account-name $STORAGE_ACCOUNT_NAME --query '[0].value' -o tsv) \
+            --azure-file-volume-share-name $FILE_SHARE_NAME \
+            --azure-file-volume-mount-path /var/www/html/web/sites \
+            
           echo "Waiting for container to start (60 seconds)..."
           sleep 60
+          
           echo "Checking container logs..."
           az container logs --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME || echo "Failed to retrieve logs"
+          
           echo "Checking container status..."
           az container show --resource-group drupal-rg-user1-5ad1bbb1 --name $CONTAINER_NAME --query "provisioningState"
+          
           echo "Drupal site URL: http://drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID-narjes.centralus.azurecontainer.io"
-
-  
