@@ -29,6 +29,16 @@ until mysql -u"$DRUPAL_DB_USER" -p"$DRUPAL_DB_PASSWORD" "$DRUPAL_DB_NAME" -e "SE
 done
 
 echo "Database connection successful!"
+# Vérifier le montage du volume (avant la connexion DB)
+echo "Checking volume mount..."
+if ! mount | grep -q "/var/www/html/web/sites/default"; then
+  echo "Error: Azure File Share volume not mounted on /var/www/html/web/sites/default!"
+  exit 1
+fi
+echo "Volume mounted successfully!"
+ls -la /var/www/html/web/sites/default || { echo "Error: Cannot access volume!"; exit 1; }
+echo "Volume contents before:"
+ls -la /var/www/html/web/sites/default
 
 if [ ! -f /var/www/html/web/sites/default/settings.php ]; then
   echo "Installing Drupal..."
