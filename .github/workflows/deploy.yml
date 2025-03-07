@@ -45,7 +45,7 @@ jobs:
 
       - name: Deploy Drupal to ACI with Existing Database
         run: |
-          INSTANCE_ID=$(date +%s)
+          INSTANCE_ID=$(date +"%Y%m%d%H%M%S")
           CONTAINER_NAME="drupal-${{ github.event.inputs.user_id }}-$INSTANCE_ID"
           az container create \
             --resource-group drupal-rg-user1-5ad1bbb1 \
