@@ -42,7 +42,7 @@ ls -la /var/www/html/web/sites/default
 
 if [ ! -f /var/www/html/web/sites/default/settings.php ]; then
   echo "Installing Drupal..."
-  cp /var/www/html/web/sites/default/default.settings.php /var/www/html/web/sites/default/settings.php || { echo "Failed to copy settings.php"; exit 1; }
+  cp /var/www/html/web/sites/default/settings.php /var/www/html/web/sites/default/settings.php || { echo "Failed to copy settings.php"; exit 1; }
   chmod 664 /var/www/html/web/sites/default/settings.php || { echo "Failed to chmod settings.php"; exit 1; }
 
   # Configurer settings.php avec SSL (pour runtime)
